@@ -155,7 +155,7 @@ export function composeView(
         seat: m.seat,
         ...(m.runtime ? { runtime: m.runtime } : {}),
         label: m.label,
-        paneCommand: `ssh ${shellQuote(dest)} tmux attach ${attachFlag}-t ${shellQuote(m.tmuxSession)}`,
+        paneCommand: `ssh ${shellQuote(dest)} tmux attach ${attachFlag}-t ${shellQuote(shellQuote(m.tmuxSession))}`,
         readOnly: m.readOnly,
       });
       continue;
