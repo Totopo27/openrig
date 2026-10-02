@@ -53,8 +53,12 @@ function scanHeaders(lines) {
     if (fenceMatch) {
       const marker = fenceMatch[1][0];
       const length = fenceMatch[1].length;
-      if (!fence) fence = { marker, length };
-      else if (fence.marker === marker && length >= fence.length) fence = null;
+      if (!fence) {
+        fence = { marker, length };
+      } else if (fence.marker === marker && length >= fence.length
+        && /^[ \t\r]*$/.test(line.slice(fenceMatch[0].length))) {
+        fence = null;
+      }
       continue;
     }
     if (fence) continue;
