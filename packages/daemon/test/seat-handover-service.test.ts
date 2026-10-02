@@ -550,7 +550,7 @@ describe("SeatHandoverService", () => {
     expect(target).toBe("dev-impl@seat-rig");
     expect(packet).toContain("OpenRig seat handover");
     expect(packet).toContain("predecessor screen tail");
-    expect(sendKeys).toHaveBeenCalledWith("dev-impl@seat-rig", ["C-m"]);
+    expect(sendKeys).toHaveBeenCalledWith("dev-impl@seat-rig", ["Enter"]);
     expect(sendText.mock.invocationCallOrder[0]!).toBeLessThan(hasSession.mock.invocationCallOrder[0]!);
 
     // B1: the successor was launched into a LIVE agent (launchHarness +

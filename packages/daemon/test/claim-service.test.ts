@@ -189,7 +189,7 @@ describe("ClaimService", () => {
     expect(sendKeysSpy).toHaveBeenCalled();
     const keysCall = sendKeysSpy.mock.calls[0] as [string, string[]];
     expect(keysCall[0]).toBe("adopted-sess");
-    expect(keysCall[1]).toContain("C-m");
+    expect(keysCall[1]).toContain("Enter");
   });
 
   // T18: bind delivers post-claim identity hint
@@ -208,7 +208,7 @@ describe("ClaimService", () => {
 
     expect(sendKeysSpy).toHaveBeenCalled();
     const keysCall = sendKeysSpy.mock.calls[0] as [string, string[]];
-    expect(keysCall[1]).toContain("C-m");
+    expect(keysCall[1]).toContain("Enter");
   });
 
   // T19: createAndBindToPod delivers post-claim identity hint
@@ -229,7 +229,7 @@ describe("ClaimService", () => {
 
     expect(sendKeysSpy).toHaveBeenCalled();
     const keysCall = sendKeysSpy.mock.calls[0] as [string, string[]];
-    expect(keysCall[1]).toContain("C-m");
+    expect(keysCall[1]).toContain("Enter");
   });
 
   // T20: hint text contains required identity fields

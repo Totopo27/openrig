@@ -832,7 +832,7 @@ export class SeatHandoverService {
     }
     // Same spike-proven 200ms settle as the restore packet (staged-not-consumed class).
     await this.sleep(200);
-    const submit = await this.tmuxAdapter.sendKeys(successorSession, ["C-m"]);
+    const submit = await this.tmuxAdapter.sendKeys(successorSession, ["Enter"]);
     if (!submit.ok) {
       return { ok: false, message: (submit as { message?: string }).message ?? "submit failed" };
     }
@@ -869,7 +869,7 @@ export class SeatHandoverService {
     // input box (r2 measured 46s until a manual Enter) — the handover committed complete while the
     // packet was never consumed: the staged-not-consumed class, shipped by the product itself.
     await this.sleep(200);
-    const submit = await this.tmuxAdapter.sendKeys(successorSession, ["C-m"]);
+    const submit = await this.tmuxAdapter.sendKeys(successorSession, ["Enter"]);
     if (!submit.ok) {
       return { ok: false, message: (submit as { message?: string }).message ?? "submit failed" };
     }

@@ -570,7 +570,7 @@ export class TmuxAdapter {
    *         CR, and CR (= `C-m` = Enter) is SUBMIT in the Claude/Codex TUIs - a
    *         default paste of a multi-line pack would submit on every newline.
    *   `-d`  drop the buffer after a successful paste.
-   * The single trailing submit stays the caller's separate `sendKeys(["C-m"])`.
+   * The single trailing submit stays the caller's separate `sendKeys(["Enter"])`.
    * Cleanup unlinks the temp file in `finally`; if the buffer was loaded but the
    * paste failed (e.g. missing target), an explicit `delete-buffer` runs so no
    * buffer leaks. Unique temp + buffer names per call keep parallel `rig up`
