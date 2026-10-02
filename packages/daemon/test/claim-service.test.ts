@@ -170,7 +170,7 @@ describe("ClaimService", () => {
     expect(metaMap.get("@rigged_logical_id")).toBe("dev.coder");
   });
 
-  // T17: bind delivers post-claim identity hint via sendText + sendKeys C-m
+  // T17: bind delivers post-claim identity hint via sendText + sendKeys Enter
   it("bind delivers post-claim identity hint via sendText + sendKeys", async () => {
     const rig = seedRig();
     const node = rigRepo.addNode(rig.id, "adopted-sess", { runtime: "claude-code", cwd: "/tmp" });
@@ -185,7 +185,7 @@ describe("ClaimService", () => {
     expect(textCall[1]).toContain("adopted-sess"); // logicalId defaults to tmux session
     expect(textCall[1]).toContain("rig whoami --json");
 
-    // Must also submit with C-m
+    // Must also submit with Enter
     expect(sendKeysSpy).toHaveBeenCalled();
     const keysCall = sendKeysSpy.mock.calls[0] as [string, string[]];
     expect(keysCall[0]).toBe("adopted-sess");

@@ -83,7 +83,7 @@ describe("SessionTransport submitOnly — the guarded bare-Enter retry", () => {
 
   const STAGED_PIECE = "# World from primitives\n\nThe seat learns the world by composing…";
 
-  it("presses C-m exactly once, types NOTHING, when the pane shows the expected staged text", async () => {
+  it("presses Enter exactly once, types NOTHING, when the pane shows the expected staged text", async () => {
     const sendText = vi.fn(async () => ({ ok: true as const }));
     const sendKeys = vi.fn(async () => ({ ok: true as const }));
     const transport = makeTransport(mockTmux({

@@ -864,7 +864,7 @@ export class SeatHandoverService {
       return { ok: false, message: (sent as { message?: string }).message ?? "send_text failed" };
     }
     // B16 rework (r2 live door finding): the SHARED paste-then-submit sequencing — the transport's
-    // spike-proven 200ms settle between send_text and C-m (session-transport.ts, "Wait 200ms").
+    // spike-proven 200ms settle between send_text and Enter (session-transport.ts, "Wait 200ms").
     // Without it the multi-KB packet sat STAGED-UNSENT as collapsed paste blocks in the successor's
     // input box (r2 measured 46s until a manual Enter) — the handover committed complete while the
     // packet was never consumed: the staged-not-consumed class, shipped by the product itself.

@@ -732,7 +732,7 @@ describe("SeatHandoverService", () => {
     expect(packet).toContain("predecessor screen tail");
   });
 
-  it("B16 rework: packet delivery uses the shared paste-then-submit sequencing — a settle sleep BETWEEN send_text and C-m (r2 live: without it the packet sat staged-unsent 46s)", async () => {
+  it("B16 rework: packet delivery uses the shared paste-then-submit sequencing — a settle sleep BETWEEN send_text and Enter (r2 live: without it the packet sat staged-unsent 46s)", async () => {
     seedSeat({ runtime: "codex" });
     const sleeps: number[] = [];
     const orderedCalls: string[] = [];

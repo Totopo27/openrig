@@ -399,7 +399,7 @@ describe("Codex runtime adapter", () => {
   // sendText -> sleep -> sendKeys(["Enter"]) sequence unchanged. The large-payload
   // buffer mechanics live in TmuxAdapter; the adapter hands the full content to
   // sendText and fires the single trailing submit.
-  it("delivers a large (>100KB) send_text startup file via sendText then submits with C-m", async () => {
+  it("delivers a large (>100KB) send_text startup file via sendText then submits with Enter", async () => {
     const tmux = mockTmux();
     const big = "L".repeat(120 * 1024);
     const adapter = new CodexRuntimeAdapter({

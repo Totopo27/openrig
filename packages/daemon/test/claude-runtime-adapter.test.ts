@@ -270,7 +270,7 @@ describe("Claude Code runtime adapter", () => {
   // sendText -> sleep -> sendKeys(["Enter"]) sequence unchanged. The large-payload
   // buffer mechanics live in TmuxAdapter; the adapter's job is to hand the full
   // content to sendText and fire the single trailing submit.
-  it("delivers a large (>100KB) send_text startup file via sendText then submits with C-m", async () => {
+  it("delivers a large (>100KB) send_text startup file via sendText then submits with Enter", async () => {
     const tmux = mockTmux();
     const big = "L".repeat(120 * 1024);
     const fs = mockFs({ "/rig/startup/big-pack.md": big });
