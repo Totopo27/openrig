@@ -2448,41 +2448,39 @@ export class QueueRepository {
       );
     }
     const hasNote = typeof input.transitionNote === "string" && input.transitionNote.trim().length > 0;
-    const hasSummaryUpdate = input.summary !== undefined;
     const isGuardedTerminal = (["done", "canceled", "handed-off"] as const).includes(
       qitem.state as "done" | "canceled" | "handed-off",
     );
-    const disallowed = input.reopen === true
-      || input.closureReason != null
-      || input.closureTarget != null
-      || input.handedOffTo != null
-      || input.blockedOn != null
-      || input.wakeWatchdogId != null
-      || input.wakeAfterSeconds != null
-      || input.wakeMaxSeconds != null
-      || input.wakeProgressEvidence != null
-      || input.wakeMessage != null
-      || input.evidenceRef != null;
-    const isStatePreservingAppend = input.state === undefined
-      || (isGuardedTerminal && input.state === qitem.state)
-      || (input.state === qitem.state && !disallowed && (hasNote || hasSummaryUpdate));
+    const isStatePreservingAppend = input.state === undefined || (isGuardedTerminal && input.state === qitem.state);
 
     if (isStatePreservingAppend) {
-      if (input.state === undefined && !hasNote && !hasSummaryUpdate) {
+      if (input.state === undefined && !hasNote && input.summary === undefined) {
         throw new QueueRepositoryError(
           "state_or_note_required",
           "queue update requires --state, a non-empty --note, or --summary; nothing was written",
         );
       }
+      const disallowed = input.reopen === true
+        || input.closureReason != null
+        || input.closureTarget != null
+        || input.handedOffTo != null
+        || input.blockedOn != null
+        || input.wakeWatchdogId != null
+        || input.wakeAfterSeconds != null
+        || input.wakeMaxSeconds != null
+        || input.wakeProgressEvidence != null
+        || input.wakeMessage != null
+        || input.evidenceRef != null;
       if (disallowed) {
         throw new QueueRepositoryError(
           "note_append_fields_not_admitted",
-          "a state-preserving update accepts only --note, --summary (and an optional same --state); state-write fields were supplied, so nothing was written",
+          "a state-preserving note append accepts only --note, --summary (and an optional same --state); state-write fields were supplied, so nothing was written",
         );
       }
 
-      if (hasSummaryUpdate) {
-        this.persistSummary(input.qitemId, input.summary ?? null);
+      const hasSummaryUpdate = input.summary !== undefined && input.summary !== null;
+      if (hasSummaryUpdate && typeof input.summary === "string") {
+        this.persistSummary(input.qitemId, input.summary);
       }
 
       const note = input.transitionNote

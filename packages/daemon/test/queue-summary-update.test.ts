@@ -179,5 +179,44 @@ describe("Issue #1040: update existing queue summary without changing qitem stat
         blockedOn: "another@seat",
       });
     }).toThrow(QueueRepositoryError);
+    expect(repo.getById(item.qitemId)?.summary).toBe("S");
+  });
+
+  it("allows updating summary in terminal states without reopening or mutating other fields", async () => {
+    const item = await repo.create({
+      sourceSession: "orch@rig",
+      destinationSession: "worker@rig",
+      body: "Terminal task",
+      summary: "Initial summary",
+      tags: ["qa", "release"],
+    });
+
+    repo.update({
+      qitemId: item.qitemId,
+      actorSession: "worker@rig",
+      state: "in-progress",
+    });
+
+    repo.update({
+      qitemId: item.qitemId,
+      actorSession: "worker@rig",
+      state: "done",
+      closureReason: "no-follow-on",
+    });
+
+    expect(repo.getById(item.qitemId)?.state).toBe("done");
+
+    const updated = repo.update({
+      qitemId: item.qitemId,
+      actorSession: "orch@rig",
+      summary: "Updated post-close brief",
+    });
+
+    expect(updated.state).toBe("done");
+    expect(updated.closureReason).toBe("no-follow-on");
+    expect(updated.summary).toBe("Updated post-close brief");
+    expect(updated.body).toBe("Terminal task");
+    expect(updated.destinationSession).toBe("worker@rig");
+    expect(updated.tags).toEqual(["qa", "release"]);
   });
 });
