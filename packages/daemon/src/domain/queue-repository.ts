@@ -2448,16 +2448,17 @@ export class QueueRepository {
       );
     }
     const hasNote = typeof input.transitionNote === "string" && input.transitionNote.trim().length > 0;
+    const hasValidSummary = typeof input.summary === "string" && input.summary.trim().length > 0;
     const isGuardedTerminal = (["done", "canceled", "handed-off"] as const).includes(
       qitem.state as "done" | "canceled" | "handed-off",
     );
     const isStatePreservingAppend = input.state === undefined || (isGuardedTerminal && input.state === qitem.state);
 
     if (isStatePreservingAppend) {
-      if (input.state === undefined && !hasNote && input.summary === undefined) {
+      if (input.state === undefined && !hasNote && !hasValidSummary) {
         throw new QueueRepositoryError(
           "state_or_note_required",
-          "queue update requires --state, a non-empty --note, or --summary; nothing was written",
+          "queue update requires --state, a non-empty --note, or a non-empty --summary; nothing was written",
         );
       }
       const disallowed = input.reopen === true
@@ -2470,21 +2471,25 @@ export class QueueRepository {
         || input.wakeMaxSeconds != null
         || input.wakeProgressEvidence != null
         || input.wakeMessage != null
-        || input.evidenceRef != null;
+        || input.evidenceRef != null
+        || (input.state !== undefined && input.summary != null)
+        || (input.summary != null && !hasValidSummary);
       if (disallowed) {
         throw new QueueRepositoryError(
           "note_append_fields_not_admitted",
-          "a state-preserving note append accepts only --note, --summary (and an optional same --state); state-write fields were supplied, so nothing was written",
+          "a state-preserving note append accepts only --note (and an optional same --state); state-write fields were supplied, so nothing was written",
         );
       }
 
-      const hasSummaryUpdate = input.summary !== undefined && input.summary !== null;
-      if (hasSummaryUpdate && typeof input.summary === "string") {
-        this.persistSummary(input.qitemId, input.summary);
+      if (hasValidSummary) {
+        this.persistSummary(input.qitemId, input.summary!);
       }
 
-      const note = input.transitionNote
-        ?? (hasSummaryUpdate ? "summary updated" : undefined);
+      const note = hasValidSummary
+        ? (hasNote
+          ? (input.transitionNote!.includes("(summary updated)") ? input.transitionNote : `${input.transitionNote} (summary updated)`)
+          : "summary updated")
+        : input.transitionNote;
 
       this.transitionLog.append({
         qitemId: input.qitemId,
@@ -2504,7 +2509,7 @@ export class QueueRepository {
         closureReason: null,
         closureTarget: null,
         actorSession: input.actorSession,
-        summary: hasSummaryUpdate ? (input.summary ?? null) : (qitem.summary ?? null),
+        summary: hasValidSummary ? input.summary! : (qitem.summary ?? null),
       });
       return { persistedEvent, persistedEvents: [persistedEvent] };
     }

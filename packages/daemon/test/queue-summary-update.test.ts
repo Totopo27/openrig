@@ -72,7 +72,7 @@ describe("Issue #1040: update existing queue summary without changing qitem stat
     const transitions = repo.transitionLog.listForQitem(item.qitemId);
     const lastTransition = transitions[transitions.length - 1];
     expect(lastTransition?.state).toBe("pending");
-    expect(lastTransition?.transitionNote).toBe("corrected wording in brief");
+    expect(lastTransition?.transitionNote).toBe("corrected wording in brief (summary updated)");
   });
 
   it("allows updating summary on an in-progress row without state transition", async () => {
@@ -218,5 +218,219 @@ describe("Issue #1040: update existing queue summary without changing qitem stat
     expect(updated.body).toBe("Terminal task");
     expect(updated.destinationSession).toBe("worker@rig");
     expect(updated.tags).toEqual(["qa", "release"]);
+  });
+
+  describe("malformed summaries write nothing (issue #1040)", () => {
+    it("refuses summary: null with no note or state and writes nothing", async () => {
+      const item = await repo.create({
+        sourceSession: "orch@rig",
+        destinationSession: "worker@rig",
+        body: "Task",
+        summary: "Original summary",
+      });
+      const initialTransitions = repo.transitionLog.listForQitem(item.qitemId);
+
+      expect(() => {
+        repo.update({
+          qitemId: item.qitemId,
+          actorSession: "worker@rig",
+          summary: null,
+        });
+      }).toThrow(QueueRepositoryError);
+
+      const after = repo.getById(item.qitemId);
+      expect(after?.summary).toBe("Original summary");
+      expect(after?.state).toBe("pending");
+      expect(repo.transitionLog.listForQitem(item.qitemId)).toHaveLength(initialTransitions.length);
+    });
+
+    it("refuses a non-string summary with no note or state and writes nothing", async () => {
+      const item = await repo.create({
+        sourceSession: "orch@rig",
+        destinationSession: "worker@rig",
+        body: "Task",
+        summary: "Original summary",
+      });
+      const initialTransitions = repo.transitionLog.listForQitem(item.qitemId);
+
+      expect(() => {
+        repo.update({
+          qitemId: item.qitemId,
+          actorSession: "worker@rig",
+          summary: 123 as unknown as string,
+        });
+      }).toThrow(QueueRepositoryError);
+
+      const after = repo.getById(item.qitemId);
+      expect(after?.summary).toBe("Original summary");
+      expect(after?.state).toBe("pending");
+      expect(repo.transitionLog.listForQitem(item.qitemId)).toHaveLength(initialTransitions.length);
+    });
+
+    it("refuses an empty or whitespace-only summary and writes nothing", async () => {
+      const item = await repo.create({
+        sourceSession: "orch@rig",
+        destinationSession: "worker@rig",
+        body: "Task",
+        summary: "Original summary",
+      });
+      const initialTransitions = repo.transitionLog.listForQitem(item.qitemId);
+
+      // Empty string
+      expect(() => {
+        repo.update({
+          qitemId: item.qitemId,
+          actorSession: "worker@rig",
+          summary: "",
+        });
+      }).toThrow(QueueRepositoryError);
+
+      expect(repo.getById(item.qitemId)?.summary).toBe("Original summary");
+      expect(repo.transitionLog.listForQitem(item.qitemId)).toHaveLength(initialTransitions.length);
+
+      // Whitespace only
+      expect(() => {
+        repo.update({
+          qitemId: item.qitemId,
+          actorSession: "worker@rig",
+          summary: "   \t\n  ",
+        });
+      }).toThrow(QueueRepositoryError);
+
+      expect(repo.getById(item.qitemId)?.summary).toBe("Original summary");
+      expect(repo.transitionLog.listForQitem(item.qitemId)).toHaveLength(initialTransitions.length);
+    });
+
+    it("refuses a malformed summary supplied alongside a transition note and writes nothing", async () => {
+      const item = await repo.create({
+        sourceSession: "orch@rig",
+        destinationSession: "worker@rig",
+        body: "Task",
+        summary: "Original summary",
+      });
+      const initialTransitions = repo.transitionLog.listForQitem(item.qitemId);
+
+      expect(() => {
+        repo.update({
+          qitemId: item.qitemId,
+          actorSession: "worker@rig",
+          summary: "",
+          transitionNote: "some note",
+        });
+      }).toThrow(QueueRepositoryError);
+
+      expect(repo.getById(item.qitemId)?.summary).toBe("Original summary");
+      expect(repo.transitionLog.listForQitem(item.qitemId)).toHaveLength(initialTransitions.length);
+
+      expect(() => {
+        repo.update({
+          qitemId: item.qitemId,
+          actorSession: "worker@rig",
+          summary: 456 as unknown as string,
+          transitionNote: "some note",
+        });
+      }).toThrow(QueueRepositoryError);
+
+      expect(repo.getById(item.qitemId)?.summary).toBe("Original summary");
+      expect(repo.transitionLog.listForQitem(item.qitemId)).toHaveLength(initialTransitions.length);
+    });
+  });
+
+  describe("summary sent with explicit same state is refused (issue #1040)", () => {
+    it("refuses summary sent with same state on a done item and writes nothing", async () => {
+      const item = await repo.create({
+        sourceSession: "orch@rig",
+        destinationSession: "worker@rig",
+        body: "Terminal task",
+        summary: "Original summary",
+      });
+
+      repo.update({
+        qitemId: item.qitemId,
+        actorSession: "worker@rig",
+        state: "done",
+        closureReason: "no-follow-on",
+      });
+
+      const initialTransitions = repo.transitionLog.listForQitem(item.qitemId);
+
+      expect(() => {
+        repo.update({
+          qitemId: item.qitemId,
+          actorSession: "worker@rig",
+          state: "done",
+          summary: "Attempted summary update with same state",
+        });
+      }).toThrow(QueueRepositoryError);
+
+      const after = repo.getById(item.qitemId);
+      expect(after?.state).toBe("done");
+      expect(after?.summary).toBe("Original summary");
+      expect(repo.transitionLog.listForQitem(item.qitemId)).toHaveLength(initialTransitions.length);
+    });
+
+    it("refuses summary sent with same state on a canceled item and writes nothing", async () => {
+      const item = await repo.create({
+        sourceSession: "orch@rig",
+        destinationSession: "worker@rig",
+        body: "Canceled task",
+        summary: "Original summary",
+      });
+
+      repo.update({
+        qitemId: item.qitemId,
+        actorSession: "worker@rig",
+        state: "canceled",
+      });
+
+      const initialTransitions = repo.transitionLog.listForQitem(item.qitemId);
+
+      expect(() => {
+        repo.update({
+          qitemId: item.qitemId,
+          actorSession: "worker@rig",
+          state: "canceled",
+          summary: "Attempted summary update with same state",
+        });
+      }).toThrow(QueueRepositoryError);
+
+      const after = repo.getById(item.qitemId);
+      expect(after?.state).toBe("canceled");
+      expect(after?.summary).toBe("Original summary");
+      expect(repo.transitionLog.listForQitem(item.qitemId)).toHaveLength(initialTransitions.length);
+    });
+
+    it("refuses summary sent with same state on a handed-off item and writes nothing", async () => {
+      const item = await repo.create({
+        sourceSession: "orch@rig",
+        destinationSession: "worker@rig",
+        body: "Handoff task",
+        summary: "Original summary",
+      });
+
+      repo.update({
+        qitemId: item.qitemId,
+        actorSession: "worker@rig",
+        state: "handed-off",
+        closureReason: "handed_off_to",
+        closureTarget: "qitem-target",
+      });
+
+      const initialTransitions = repo.transitionLog.listForQitem(item.qitemId);
+
+      expect(() => {
+        repo.update({
+          qitemId: item.qitemId,
+          actorSession: "worker@rig",
+          state: "handed-off",
+          summary: "Attempted summary update with same state",
+        });
+      }).toThrow(QueueRepositoryError);
+
+      const after = repo.getById(item.qitemId);
+      expect(after?.state).toBe("handed-off");
+      expect(after?.summary).toBe("Original summary");
+      expect(repo.transitionLog.listForQitem(item.qitemId)).toHaveLength(initialTransitions.length);
+    });
   });
 });
