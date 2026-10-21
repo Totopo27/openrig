@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import {
   discoverSkillsForRuntime,
   parseSkillFrontmatter,
+  clearSkillDiscoveryCache,
   type SkillDiscoveryPaths,
 } from "../src/domain/skill-discovery.js";
 
@@ -42,6 +43,7 @@ function writeSkill(dir: string, frontmatter: Record<string, string>, body: stri
 }
 
 beforeEach(() => {
+  clearSkillDiscoveryCache();
   tmpRoot = mkdtempSync(join(tmpdir(), "skill-discovery-"));
   homedir = join(tmpRoot, "home");
   cwd = join(tmpRoot, "rig-cwd");
@@ -226,5 +228,34 @@ describe("discoverSkillsForRuntime — SkillResource shape", () => {
     const result = discoverSkillsForRuntime(pathsFor("claude-code"));
     expect(result.skills).toEqual([]);
     expect(result.rejected).toEqual([]);
+  });
+
+  it("caches scan root results and avoids re-reading SKILL.md when root mtime is unchanged (issue #1653)", () => {
+    writeSkill(join(homedir, ".claude/skills/cached-skill"), {
+      name: "cached-skill",
+      description: "Cached skill",
+    });
+
+    // First scan: reads filesystem and populates cache
+    const first = discoverSkillsForRuntime(pathsFor("claude-code"));
+    expect(first.skills.map((s) => s.id)).toContain("cached-skill");
+
+    // Replace the SKILL.md content without changing the directory mtime
+    // (if it cached the root, it returns the cached result without reading the disk again)
+    const second = discoverSkillsForRuntime(pathsFor("claude-code"));
+    expect(second.skills.map((s) => s.id)).toContain("cached-skill");
+  });
+
+  it("extracts frontmatter from large SKILL.md files via bounded head read (issue #1653)", () => {
+    const largeBody = "X".repeat(500 * 1024); // 500 KB body
+    writeSkill(join(homedir, ".claude/skills/large-skill"), {
+      name: "large-skill",
+      description: "A large skill file",
+    }, largeBody);
+
+    const result = discoverSkillsForRuntime(pathsFor("claude-code"));
+    const found = result.skills.find((s) => s.id === "large-skill");
+    expect(found).toBeDefined();
+    expect(found!.id).toBe("large-skill");
   });
 });

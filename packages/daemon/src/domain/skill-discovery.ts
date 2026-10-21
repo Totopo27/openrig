@@ -10,7 +10,7 @@
 //
 // SC-29 EXCEPTION #7 declared in slice ACK §5.
 
-import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { SkillResource } from "./types.js";
@@ -76,6 +76,75 @@ export interface SkillProvenanceResult {
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/;
 
+/** Maximum bytes to read for extracting frontmatter header from SKILL.md.
+ *  Prevents loading multi-megabyte skill bodies into memory synchronously. */
+const HEAD_READ_BUFFER_SIZE = 64 * 1024;
+
+/** Bounded read of frontmatter from a file without reading the entire document into memory.
+ *  Falls back to reading full file only if the closing `---` was not within HEAD_READ_BUFFER_SIZE. */
+function readSkillFrontmatterFromFile(filePath: string): ParseResult {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, "r");
+    const buf = Buffer.alloc(HEAD_READ_BUFFER_SIZE);
+    const bytesRead = readSync(fd, buf, 0, HEAD_READ_BUFFER_SIZE, 0);
+    const chunk = buf.toString("utf-8", 0, bytesRead);
+
+    // Look for closing delimiter `\n---`
+    const firstDelimiter = chunk.indexOf("---");
+    if (firstDelimiter !== -1) {
+      const secondDelimiter = chunk.indexOf("\n---", firstDelimiter + 3);
+      if (secondDelimiter !== -1) {
+        // We found both delimiters in the head chunk
+        const remainingAfterSecond = chunk.slice(secondDelimiter + 4);
+        const hasBody = remainingAfterSecond.trim().length > 0 || bytesRead === HEAD_READ_BUFFER_SIZE;
+        if (hasBody) {
+          const fmText = chunk.slice(firstDelimiter + 3, secondDelimiter);
+          let parsed: unknown;
+          try {
+            parsed = parseYaml(fmText);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { ok: false, reason: `frontmatter YAML parse error: ${msg}` };
+          }
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return { ok: false, reason: "frontmatter is not a YAML mapping" };
+          }
+          const fm = parsed as Record<string, unknown>;
+          if (typeof fm.name !== "string" || fm.name.trim().length === 0) {
+            return { ok: false, reason: "frontmatter missing required `name` field" };
+          }
+          if (typeof fm.description !== "string" || fm.description.trim().length === 0) {
+            return { ok: false, reason: "frontmatter missing required `description` field" };
+          }
+          return {
+            ok: true,
+            frontmatter: { ...fm, name: fm.name as string, description: fm.description as string } as SkillFrontmatter,
+            body: remainingAfterSecond,
+          };
+        }
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: `SKILL.md read error: ${msg}` };
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+
+  // Fallback to full file read if frontmatter exceeded HEAD_READ_BUFFER_SIZE or EOF edge cases
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf-8");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: `SKILL.md read error: ${msg}` };
+  }
+  return parseSkillFrontmatter(content);
+}
+
 /** Parse a SKILL.md document into frontmatter + body, validating the
  *  shape Claude Code and Codex both require: a YAML frontmatter block
  *  delimited by `---` lines, with at minimum `name` + `description`
@@ -118,6 +187,66 @@ export function parseSkillFrontmatter(content: string): ParseResult {
   };
 }
 
+interface CacheEntry {
+  mtimeMs: number;
+  skills: Array<{ id: string; path: string }>;
+  rejected: SkillRejection[];
+}
+
+const rootCache = new Map<string, CacheEntry>();
+
+/** Clear the in-memory scan root cache (exposed for tests / cache invalidation). */
+export function clearSkillDiscoveryCache(): void {
+  rootCache.clear();
+  provenanceRootCache.clear();
+}
+
+function scanSingleRoot(root: string): { skills: Array<{ id: string; path: string }>; rejected: SkillRejection[] } {
+  let rootStat;
+  try {
+    rootStat = statSync(root);
+  } catch {
+    return { skills: [], rejected: [] };
+  }
+  if (!rootStat.isDirectory()) return { skills: [], rejected: [] };
+
+  const cached = rootCache.get(root);
+  if (cached && cached.mtimeMs === rootStat.mtimeMs) {
+    return { skills: cached.skills, rejected: cached.rejected };
+  }
+
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return { skills: [], rejected: [] };
+  }
+
+  const skills: Array<{ id: string; path: string }> = [];
+  const rejected: SkillRejection[] = [];
+
+  for (const entry of entries) {
+    const skillDir = join(root, entry);
+    let stat;
+    try { stat = statSync(skillDir); } catch { continue; }
+    if (!stat.isDirectory()) continue;
+
+    const skillFile = join(skillDir, "SKILL.md");
+    if (!existsSync(skillFile)) continue;
+
+    const parsed = readSkillFrontmatterFromFile(skillFile);
+    if (!parsed.ok) {
+      rejected.push({ path: skillDir, reason: parsed.reason });
+      continue;
+    }
+
+    skills.push({ id: parsed.frontmatter.name, path: skillDir });
+  }
+
+  rootCache.set(root, { mtimeMs: rootStat.mtimeMs, skills, rejected });
+  return { skills, rejected };
+}
+
 /** Discover skills for a runtime by scanning the canonical filesystem
  *  paths and structurally validating each candidate. Returns the
  *  accepted skills as SkillResource records (id from frontmatter; path
@@ -130,53 +259,18 @@ export function discoverSkillsForRuntime(paths: SkillDiscoveryPaths): SkillDisco
   const seenIds = new Set<string>();
 
   for (const root of scanRoots) {
-    if (!existsSync(root)) continue;
-    let entries: string[];
-    try {
-      entries = readdirSync(root);
-    } catch {
-      // Permission / IO error — silent skip; this is best-effort.
-      continue;
-    }
+    const result = scanSingleRoot(root);
+    rejected.push(...result.rejected);
 
-    for (const entry of entries) {
-      const skillDir = join(root, entry);
-      let stat;
-      try { stat = statSync(skillDir); } catch { continue; }
-      if (!stat.isDirectory()) continue;
-
-      const skillFile = join(skillDir, "SKILL.md");
-      if (!existsSync(skillFile)) {
-        // Not a skill — silently skip (a directory without SKILL.md is
-        // either unrelated content or a partially-set-up skill the
-        // operator hasn't finished).
-        continue;
-      }
-
-      let content: string;
-      try {
-        content = readFileSync(skillFile, "utf-8");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        rejected.push({ path: skillDir, reason: `SKILL.md read error: ${msg}` });
-        continue;
-      }
-
-      const parsed = parseSkillFrontmatter(content);
-      if (!parsed.ok) {
-        rejected.push({ path: skillDir, reason: parsed.reason });
-        continue;
-      }
-
-      const id = parsed.frontmatter.name;
-      if (seenIds.has(id)) {
+    for (const skill of result.skills) {
+      if (seenIds.has(skill.id)) {
         // Earlier root in the precedence list already provided this
         // id; later occurrences are shadowed by the most-specific-wins
         // rule encoded in listScanRoots ordering.
         continue;
       }
-      seenIds.add(id);
-      skills.push({ id, path: skillDir });
+      seenIds.add(skill.id);
+      skills.push(skill);
     }
   }
 
@@ -227,6 +321,73 @@ function rootToSourceKind(root: string, paths: SkillDiscoveryPaths): SourceKind 
   return "shared_user";
 }
 
+interface ProvenanceCacheEntry {
+  mtimeMs: number;
+  skills: Array<{
+    id: string;
+    path: string;
+    frontmatter: SkillFrontmatter;
+    body: string;
+  }>;
+  rejected: SkillRejection[];
+}
+
+const provenanceRootCache = new Map<string, ProvenanceCacheEntry>();
+
+function scanSingleRootWithProvenance(root: string): {
+  skills: Array<{ id: string; path: string; frontmatter: SkillFrontmatter; body: string }>;
+  rejected: SkillRejection[];
+} {
+  let rootStat;
+  try {
+    rootStat = statSync(root);
+  } catch {
+    return { skills: [], rejected: [] };
+  }
+  if (!rootStat.isDirectory()) return { skills: [], rejected: [] };
+
+  const cached = provenanceRootCache.get(root);
+  if (cached && cached.mtimeMs === rootStat.mtimeMs) {
+    return { skills: cached.skills, rejected: cached.rejected };
+  }
+
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return { skills: [], rejected: [] };
+  }
+
+  const skills: Array<{ id: string; path: string; frontmatter: SkillFrontmatter; body: string }> = [];
+  const rejected: SkillRejection[] = [];
+
+  for (const entry of entries) {
+    const skillDir = join(root, entry);
+    let stat;
+    try { stat = statSync(skillDir); } catch { continue; }
+    if (!stat.isDirectory()) continue;
+
+    const skillFile = join(skillDir, "SKILL.md");
+    if (!existsSync(skillFile)) continue;
+
+    const parsed = readSkillFrontmatterFromFile(skillFile);
+    if (!parsed.ok) {
+      rejected.push({ path: skillDir, reason: parsed.reason });
+      continue;
+    }
+
+    skills.push({
+      id: parsed.frontmatter.name,
+      path: skillDir,
+      frontmatter: parsed.frontmatter,
+      body: parsed.body,
+    });
+  }
+
+  provenanceRootCache.set(root, { mtimeMs: rootStat.mtimeMs, skills, rejected });
+  return { skills, rejected };
+}
+
 export function discoverSkillsWithProvenance(paths: SkillDiscoveryPaths): SkillProvenanceResult {
   const scanRoots = listScanRoots(paths);
   const skills: SkillProvenanceEntry[] = [];
@@ -234,43 +395,21 @@ export function discoverSkillsWithProvenance(paths: SkillDiscoveryPaths): SkillP
   const seenIds = new Set<string>();
 
   for (const root of scanRoots) {
-    if (!existsSync(root)) continue;
-    let entries: string[];
-    try { entries = readdirSync(root); } catch { continue; }
+    const result = scanSingleRootWithProvenance(root);
+    rejected.push(...result.rejected);
 
-    for (const entry of entries) {
-      const skillDir = join(root, entry);
-      let stat;
-      try { stat = statSync(skillDir); } catch { continue; }
-      if (!stat.isDirectory()) continue;
-
-      const skillFile = join(skillDir, "SKILL.md");
-      if (!existsSync(skillFile)) continue;
-
-      let content: string;
-      try { content = readFileSync(skillFile, "utf-8"); } catch (err) {
-        rejected.push({ path: skillDir, reason: `SKILL.md read error: ${err instanceof Error ? err.message : String(err)}` });
-        continue;
-      }
-
-      const parsed = parseSkillFrontmatter(content);
-      if (!parsed.ok) {
-        rejected.push({ path: skillDir, reason: parsed.reason });
-        continue;
-      }
-
-      const id = parsed.frontmatter.name;
+    for (const skill of result.skills) {
       const sourceKind = rootToSourceKind(root, paths);
       skills.push({
-        id,
-        path: skillDir,
+        id: skill.id,
+        path: skill.path,
         sourceRoot: root,
         sourceKind,
-        frontmatter: parsed.frontmatter,
-        body: parsed.body,
-        shadowed: seenIds.has(id),
+        frontmatter: skill.frontmatter,
+        body: skill.body,
+        shadowed: seenIds.has(skill.id),
       });
-      seenIds.add(id);
+      seenIds.add(skill.id);
     }
   }
 
