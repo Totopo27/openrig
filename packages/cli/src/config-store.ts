@@ -779,6 +779,30 @@ function getNestedValue(obj: Record<string, unknown>, parts: string[]): unknown 
   return current;
 }
 
+function pruneEmptyParents(root: Record<string, unknown>, pathParts: string[]): void {
+  for (let i = pathParts.length; i > 0; i--) {
+    const currentPath = pathParts.slice(0, i);
+    const currentObj = getNestedValue(root, currentPath);
+    if (
+      currentObj !== null &&
+      typeof currentObj === "object" &&
+      !Array.isArray(currentObj) &&
+      Object.keys(currentObj as Record<string, unknown>).length === 0
+    ) {
+      const grandParentParts = currentPath.slice(0, -1);
+      const propName = currentPath[currentPath.length - 1]!;
+      const grandParent = (grandParentParts.length === 0
+        ? root
+        : getNestedValue(root, grandParentParts)) as Record<string, unknown> | undefined;
+      if (grandParent && typeof grandParent === "object") {
+        delete grandParent[propName];
+      }
+    } else {
+      break;
+    }
+  }
+}
+
 function setNestedValue(obj: Record<string, unknown>, parts: string[], value: unknown): void {
   let current = obj;
   for (let i = 0; i < parts.length - 1; i++) {
@@ -1439,7 +1463,10 @@ export class ConfigStore {
       if (!existsSync(this.configPath)) return;
       const fcDyn = this.readConfigFile();
       const subsParent = getNestedValue(fcDyn, ["feed", "subscriptions"]) as Record<string, unknown> | undefined;
-      if (subsParent && feedHost.hostId in subsParent) delete subsParent[feedHost.hostId];
+      if (subsParent && feedHost.hostId in subsParent) {
+        delete subsParent[feedHost.hostId];
+        pruneEmptyParents(fcDyn, ["feed", "subscriptions"]);
+      }
       this.writeConfig(JSON.stringify(fcDyn, null, 2) + "\n");
       return;
     }
@@ -1466,6 +1493,7 @@ export class ConfigStore {
           throw new Error(`Invalid context-pressure policy: warning (${warning}) must be less than critical (${critical})`);
         }
       }
+      pruneEmptyParents(fileConfig, parentParts);
     }
     this.writeConfig(JSON.stringify(fileConfig, null, 2) + "\n");
   }

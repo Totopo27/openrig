@@ -598,6 +598,63 @@ describe("SettingsStore (User Settings v0)", () => {
     expect(existsSync(configPath)).toBe(false);
   });
 
+  it("reset(key) prunes empty parent objects left by the reset (issue #1620)", () => {
+    const store = new SettingsStore(configPath);
+    // 1. Pruning nested path all the way up to top-level object without deleting root file
+    store.set("onboarding.default_pack.enabled", "false");
+    store.reset("onboarding.default_pack.enabled");
+    expect(JSON.parse(readFileSync(configPath, "utf-8"))).toEqual({});
+
+    // 2. Preserves sibling properties when resetting one key
+    store.set("health.context_pressure.warning_percent", "90");
+    store.set("health.context_pressure.critical_percent", "99");
+    store.reset("health.context_pressure.warning_percent");
+    let content = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(content).toEqual({
+      health: {
+        contextPressure: {
+          criticalPercent: 99,
+        },
+      },
+    });
+
+    // 3. Resetting the remaining sibling prunes the section
+    store.reset("health.context_pressure.critical_percent");
+    content = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(content).toEqual({});
+
+    // 4. Pre-existing unrelated empty objects or unknown keys are preserved
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        preExistingEmpty: {},
+        custom: { retained: 1 },
+        daemon: { port: 7433 },
+      }, null, 2) + "\n"
+    );
+    store.reset("daemon.port");
+    content = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(content).toEqual({
+      preExistingEmpty: {},
+      custom: { retained: 1 },
+    });
+
+    // 5. Dynamic feed host subscription pruning
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        feed: {
+          subscriptions: {
+            "feed-host-1": { enabled: true },
+          },
+        },
+      }, null, 2) + "\n"
+    );
+    store.reset("feed.subscriptions.feed-host-1.enabled");
+    content = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(content).toEqual({});
+  });
+
   it("set rejects unknown keys", () => {
     const store = new SettingsStore(configPath);
     expect(() => store.set("workspace.bogus", "x")).toThrow(/Unknown config key/);
