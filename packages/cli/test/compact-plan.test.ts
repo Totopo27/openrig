@@ -101,6 +101,7 @@ function makeDeps(overrides?: {
   nodesByRig?: Record<string, TestNode[]>;
   refreshStatus?: number;
   refreshThrows?: boolean;
+  configStore?: CompactPlanDeps["configStore"];
 }): { deps: CompactPlanDeps; requestedPaths: string[]; mutationMethods: Record<string, ReturnType<typeof vi.fn>> } {
   const rigs = (overrides?.rigNames ?? ["test-rig"]).map((name, i) => ({ rigId: `rig-${i}`, name }));
   const nodesByRig = overrides?.nodesByRig ?? { "rig-0": defaultNodes() };
@@ -110,6 +111,14 @@ function makeDeps(overrides?: {
     delete: vi.fn(() => { throw new Error("compact-plan must not mutate daemon state"); }),
     postText: vi.fn(() => { throw new Error("compact-plan must not mutate daemon state"); }),
     postExpectText: vi.fn(() => { throw new Error("compact-plan must not mutate daemon state"); }),
+  };
+
+  const configStore = overrides?.configStore ?? {
+    get: vi.fn((key: string) => {
+      if (key === "policies.claude_compaction.threshold_percent") return 80;
+      if (key === "policies.claude_compaction.enabled") return false;
+      return undefined;
+    }),
   };
 
   return {
@@ -136,6 +145,7 @@ function makeDeps(overrides?: {
         }),
         ...mutationMethods,
       }) as unknown as ReturnType<CompactPlanDeps["clientFactory"]>,
+      configStore,
     },
   };
 }
@@ -188,6 +198,7 @@ describe("rig compact-plan", () => {
       thresholdTokens: 400_000,
       thresholdPercent: 80,
       automaticThresholdPercent: 80,
+      automaticCompactionEnabled: false,
       oneSeatAtATime: true,
       autoCompactAllowed: false,
       explicitAuthorizationRequired: true,
@@ -473,7 +484,7 @@ describe("rig compact-plan", () => {
     expect(output).toContain("READ-ONLY PLAN");
     expect(output).toContain("does not compact");
     expect(output).toContain("Thresholds (plan triage):");
-    expect(output).toContain("configured automatic compaction threshold: 80%");
+    expect(output).toContain("configured automatic compaction threshold: 80%, off");
     expect(output).toContain("one-seat-at-a-time");
     expect(output).toContain("orch-lead@test-rig");
     expect(output).toContain("authorization");
@@ -486,7 +497,7 @@ describe("rig compact-plan", () => {
     const { deps: depsDefault } = makeDeps();
     const cmdDefault = compactPlanCommand(depsDefault);
     await cmdDefault.parseAsync(["node", "rig"]);
-    expect(logs.join("\n")).toContain("Thresholds (plan triage): 400000 estimated tokens; 80% when context window size is missing (configured automatic compaction threshold: 80%).");
+    expect(logs.join("\n")).toContain("Thresholds (plan triage): 400000 estimated tokens; 80% when context window size is missing (configured automatic compaction threshold: 80%, off).");
 
     logs = [];
     const depsConfigured = {
@@ -494,13 +505,14 @@ describe("rig compact-plan", () => {
       configStore: {
         get: vi.fn((key: string) => {
           if (key === "policies.claude_compaction.threshold_percent") return 65;
+          if (key === "policies.claude_compaction.enabled") return true;
           return undefined;
         }),
       },
     };
     const cmdConfigured = compactPlanCommand(depsConfigured);
     await cmdConfigured.parseAsync(["node", "rig"]);
-    expect(logs.join("\n")).toContain("Thresholds (plan triage): 400000 estimated tokens; 80% when context window size is missing (configured automatic compaction threshold: 65%).");
+    expect(logs.join("\n")).toContain("Thresholds (plan triage): 400000 estimated tokens; 80% when context window size is missing (configured automatic compaction threshold: 65%, on).");
 
     logs = [];
     await cmdConfigured.parseAsync(["node", "rig", "--json"]);
@@ -508,5 +520,52 @@ describe("rig compact-plan", () => {
     expect(json.policy.thresholdTokens).toBe(400_000);
     expect(json.policy.thresholdPercent).toBe(80);
     expect(json.policy.automaticThresholdPercent).toBe(65);
+    expect(json.policy.automaticCompactionEnabled).toBe(true);
+  });
+
+  it("prints that the automatic threshold could not be read and sets automaticThresholdPercent to null in JSON when config cannot be read", async () => {
+    const depsFailed = {
+      ...makeDeps().deps,
+      configStore: {
+        get: vi.fn((key: string) => {
+          if (key === "policies.claude_compaction.threshold_percent") {
+            throw new Error("malformed config.json");
+          }
+          if (key === "policies.claude_compaction.enabled") return false;
+          return undefined;
+        }),
+      },
+    };
+    const cmdFailed = compactPlanCommand(depsFailed);
+    await cmdFailed.parseAsync(["node", "rig"]);
+    expect(logs.join("\n")).toContain("Thresholds (plan triage): 400000 estimated tokens; 80% when context window size is missing (configured automatic compaction threshold could not be read: malformed config.json).");
+
+    logs = [];
+    await cmdFailed.parseAsync(["node", "rig", "--json"]);
+    const json = JSON.parse(logs.join(""));
+    expect(json.policy.automaticThresholdPercent).toBeNull();
+    expect(json.policy.automaticThresholdReason).toBe("malformed config.json");
+    expect(json.policy.automaticCompactionEnabled).toBe(false);
+  });
+
+  it("handles case where both enabled and threshold settings fail to read", async () => {
+    const depsFailed = {
+      ...makeDeps().deps,
+      configStore: {
+        get: vi.fn(() => {
+          throw new Error("corrupt config");
+        }),
+      },
+    };
+    const cmdFailed = compactPlanCommand(depsFailed);
+    await cmdFailed.parseAsync(["node", "rig"]);
+    expect(logs.join("\n")).toContain("Thresholds (plan triage): 400000 estimated tokens; 80% when context window size is missing (configured automatic compaction threshold could not be read: corrupt config).");
+
+    logs = [];
+    await cmdFailed.parseAsync(["node", "rig", "--json"]);
+    const json = JSON.parse(logs.join(""));
+    expect(json.policy.automaticThresholdPercent).toBeNull();
+    expect(json.policy.automaticThresholdReason).toBe("corrupt config");
+    expect(json.policy.automaticCompactionEnabled).toBeNull();
   });
 });
