@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { DaemonClient } from "../client.js";
+import { ConfigStore } from "../config-store.js";
 import { getDaemonStatus, getDaemonUrl, type LifecycleDeps } from "../daemon-lifecycle.js";
 import { daemonMayAnswer } from "../daemon-reachability.js";
 import { realDeps } from "./daemon.js";
@@ -7,6 +8,7 @@ import { realDeps } from "./daemon.js";
 export interface CompactPlanDeps {
   lifecycleDeps: LifecycleDeps;
   clientFactory: (url: string) => DaemonClient;
+  configStore?: Pick<ConfigStore, "get">;
 }
 
 interface RigEntry {
@@ -113,6 +115,7 @@ interface CompactPlanResult {
     defaultThresholdPercent: number;
     thresholdTokens: number;
     thresholdPercent: number;
+    automaticThresholdPercent: number;
     oneSeatAtATime: true;
     autoCompactAllowed: false;
     explicitAuthorizationRequired: true;
@@ -303,7 +306,12 @@ function analyzeNode(node: NodeEntry, thresholds: CompactPlanThresholds): Candid
   };
 }
 
-function buildPlan(nodes: NodeEntry[], thresholds = defaultThresholds(), incompleteRigs: IncompleteRig[] = []): CompactPlanResult {
+function buildPlan(
+  nodes: NodeEntry[],
+  thresholds = defaultThresholds(),
+  incompleteRigs: IncompleteRig[] = [],
+  automaticThresholdPercent = 80,
+): CompactPlanResult {
   const candidates: CandidateEntry[] = [];
   const blocked: BlockedEntry[] = [];
   const skipped: SkippedEntry[] = [];
@@ -337,6 +345,7 @@ function buildPlan(nodes: NodeEntry[], thresholds = defaultThresholds(), incompl
       defaultThresholdPercent: PERCENT_FALLBACK_THRESHOLD,
       thresholdTokens: thresholds.thresholdTokens,
       thresholdPercent: thresholds.thresholdPercent,
+      automaticThresholdPercent,
       oneSeatAtATime: true,
       autoCompactAllowed: false,
       explicitAuthorizationRequired: true,
@@ -356,7 +365,7 @@ function printHuman(plan: CompactPlanResult): void {
     console.error(`Warning: partial plan; incomplete rigs: ${plan.incompleteRigs.map(({ rig, status }) => `${rig} (${typeof status === "number" ? `HTTP ${status}` : status})`).join(", ")}`);
   }
   console.log("Policy: read_only_plan; one-seat-at-a-time marshal triage; autoCompactAllowed=false; explicit authorization required.");
-  console.log(`Thresholds: ${plan.policy.thresholdTokens} estimated tokens; ${plan.policy.thresholdPercent}% when context window size is missing.`);
+  console.log(`Thresholds (plan triage): ${plan.policy.thresholdTokens} estimated tokens; ${plan.policy.thresholdPercent}% when context window size is missing (configured automatic compaction threshold: ${plan.policy.automaticThresholdPercent}%).`);
   console.log(`Summary: ${plan.summary.candidateCount} candidates | ${plan.summary.blockedCount} blocked | ${plan.summary.skippedCount} skipped`);
   console.log();
 
@@ -489,7 +498,18 @@ Examples:
           }
         }
 
-        const plan = buildPlan(allNodes, thresholds.value, incompleteRigs);
+        let automaticThresholdPercent = 80;
+        try {
+          const store = deps.configStore ?? new ConfigStore();
+          const configured = store.get("policies.claude_compaction.threshold_percent");
+          if (typeof configured === "number" && Number.isFinite(configured)) {
+            automaticThresholdPercent = configured;
+          }
+        } catch {
+          // If reading configuration fails, fallback to default 80%
+        }
+
+        const plan = buildPlan(allNodes, thresholds.value, incompleteRigs, automaticThresholdPercent);
         if (opts.json) {
           console.log(JSON.stringify(plan, null, 2));
         } else {

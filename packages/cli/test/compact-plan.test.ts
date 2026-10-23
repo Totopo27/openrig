@@ -187,6 +187,7 @@ describe("rig compact-plan", () => {
       defaultThresholdPercent: 80,
       thresholdTokens: 400_000,
       thresholdPercent: 80,
+      automaticThresholdPercent: 80,
       oneSeatAtATime: true,
       autoCompactAllowed: false,
       explicitAuthorizationRequired: true,
@@ -471,12 +472,41 @@ describe("rig compact-plan", () => {
     const output = logs.join("\n");
     expect(output).toContain("READ-ONLY PLAN");
     expect(output).toContain("does not compact");
-    expect(output).toContain("Thresholds:");
+    expect(output).toContain("Thresholds (plan triage):");
+    expect(output).toContain("configured automatic compaction threshold: 80%");
     expect(output).toContain("one-seat-at-a-time");
     expect(output).toContain("orch-lead@test-rig");
     expect(output).toContain("authorization");
     expect(output).toContain("checkpoint/restore");
     expect(output).toContain("claude-compaction-restore");
     expect(output).toContain("No automatic compaction has been run");
+  });
+
+  it("names both thresholds and says which is which, with the automatic setting at its default and at a configured value", async () => {
+    const { deps: depsDefault } = makeDeps();
+    const cmdDefault = compactPlanCommand(depsDefault);
+    await cmdDefault.parseAsync(["node", "rig"]);
+    expect(logs.join("\n")).toContain("Thresholds (plan triage): 400000 estimated tokens; 80% when context window size is missing (configured automatic compaction threshold: 80%).");
+
+    logs = [];
+    const depsConfigured = {
+      ...makeDeps().deps,
+      configStore: {
+        get: vi.fn((key: string) => {
+          if (key === "policies.claude_compaction.threshold_percent") return 65;
+          return undefined;
+        }),
+      },
+    };
+    const cmdConfigured = compactPlanCommand(depsConfigured);
+    await cmdConfigured.parseAsync(["node", "rig"]);
+    expect(logs.join("\n")).toContain("Thresholds (plan triage): 400000 estimated tokens; 80% when context window size is missing (configured automatic compaction threshold: 65%).");
+
+    logs = [];
+    await cmdConfigured.parseAsync(["node", "rig", "--json"]);
+    const json = JSON.parse(logs.join(""));
+    expect(json.policy.thresholdTokens).toBe(400_000);
+    expect(json.policy.thresholdPercent).toBe(80);
+    expect(json.policy.automaticThresholdPercent).toBe(65);
   });
 });
